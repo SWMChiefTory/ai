@@ -27,16 +27,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and Push ARM64 Docker image
-        uses: docker/build-push-action@v5
+      - name: Build and Push Docker image (amd64)
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./docker/Dockerfile
-          platforms: linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/cheftory-ai-voice-command-server:latest
 
+      # (선택) 멀티아치로 하고 싶으면:
+      # platforms: linux/amd64,linux/arm64
 
   deploy:
     environment: production
@@ -46,34 +48,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: SSH to EC2 and create folder
+      - name: SSH to VM and create folder
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             mkdir -p cheftory-ai-voice-command-server
 
-      - name: Copy docker-compose.prod.yml to EC2
+      - name: Copy docker-compose.prod.yml to VM
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
           source: "docker/docker-compose.prod.yml"
           target: "/home/ubuntu/cheftory-ai-voice-command-server"
           strip_components: 1
 
-      - name: Create .env on EC2
+      - name: Create .env on VM
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             cat <<EOF > /home/ubuntu/cheftory-ai-voice-command-server/.env
-            APP_ENV=dev
+            APP_ENV=prod
             COMPOSE_PROJECT_NAME=cheftory
             AZURE_OPENAI_API_KEY=${{ secrets.AZURE_OPENAI_API_KEY }}
             AZURE_OPENAI_API_VERSION=${{ secrets.AZURE_OPENAI_API_VERSION }}
@@ -87,31 +89,26 @@ jobs:
             AUTH_API_BASE=${{ secrets.AUTH_API_BASE }}
             VOICE_COMMAND_API_BASE=${{ secrets.VOICE_COMMAND_API_BASE }}
             RECIPE_API_BASE=${{ secrets.RECIPE_API_BASE }}
-            AWS_REGION=${{ secrets.AWS_REGION }}
-            AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
-            AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
-            AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME }}
-            AWS_FILE_NAME=${{ secrets.AWS_FILE_NAME }}
             EOF
 
-      - name: SSH to EC2 and deploy
+      - name: SSH to VM and deploy
         uses: appleboy/ssh-action@v1
         timeout-minutes: 30
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
           command_timeout: 25m
           script: |
             cd cheftory-ai-voice-command-server
-            
+
             echo ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }} | sudo docker login -u ${{ secrets.DOCKER_HUB_USERNAME }} --password-stdin
-            
+
             sed -i "s|image: cheftory-ai-voice-command-server:latest|image: ${{ secrets.DOCKER_HUB_USERNAME }}/cheftory-ai-voice-command-server:latest|g" docker-compose.prod.yml
-            
-            sudo docker-compose -f docker-compose.prod.yml stop || true
-            sudo docker-compose -f docker-compose.prod.yml rm -f || true
+
+            sudo docker compose -f docker-compose.prod.yml stop || true
+            sudo docker compose -f docker-compose.prod.yml rm -f || true
             sudo docker rmi ${{ secrets.DOCKER_HUB_USERNAME }}/cheftory-ai-voice-command-server:latest || true
-            
-            sudo docker-compose -f docker-compose.prod.yml pull
-            sudo docker-compose -f docker-compose.prod.yml up -d
+
+            sudo docker compose -f docker-compose.prod.yml pull
+            sudo docker compose -f docker-compose.prod.yml up -d
